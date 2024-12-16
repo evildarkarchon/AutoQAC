@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "AutoQAC (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "AutoQAC (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
