@@ -1,32 +1,19 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
-using AutoQAC.Core.Models;
-using AutoQAC.Core.Progress;
-using AutoQAC.Core.Settings;
 using System.Net.Http.Json;
-using System.Threading.Tasks;
 
-namespace AutoQAC.Core.Services;
+// ReSharper disable MergeIntoPattern
+
+namespace PACT.Core;
 
 /// <summary>
 /// Handles logging operations for PACT
 /// </summary>
 public class LoggingService
 {
-    private readonly string _journalPath;
+    private readonly string _journalPath = Path.Combine(AppContext.BaseDirectory, JournalFileName);
     private const string JournalFileName = "PACT Journal.log";
-
-    public LoggingService()
-    {
-        _journalPath = Path.Combine(AppContext.BaseDirectory, JournalFileName);
-    }
 
     public async Task LogUpdateAsync(string message)
     {
@@ -50,39 +37,44 @@ public class LoggingService
 /// <summary>
 /// Handles XEdit operations with single instance enforcement
 /// </summary>
-public class XEditService : IAsyncDisposable
+public class XEditService(PactInfo info) : IAsyncDisposable
 {
-    private readonly PactInfo _info;
-    private readonly IProgressReporter _progressReporter;
     private static readonly SemaphoreSlim XEditLock = new(1, 1);
     private static readonly object ProcessLock = new();
     private Process? _currentXEditProcess;
 
-    public XEditService(PactInfo info, IProgressReporter progressReporter)
+public bool IsXEditRunning()
+{
+    lock (ProcessLock)
     {
-        _info = info;
-        _progressReporter = progressReporter;
+        if (IsCurrentXEditProcessRunning())
+            return true;
+
+        return IsAnyXEditProcessRunning();
     }
+}
 
-    public bool IsXEditRunning()
-    {
-        lock (ProcessLock)
-        {
-            if (_currentXEditProcess != null && !_currentXEditProcess.HasExited)
-                return true;
+/// <summary>
+/// Checks if the current XEdit process is running and active.
+/// </summary>
+private bool IsCurrentXEditProcessRunning()
+{
+    return _currentXEditProcess != null && !_currentXEditProcess.HasExited;
+}
 
-            var xEditProcesses = Process.GetProcesses()
-                .Where(p => _info.IsXEdit(p.ProcessName.ToLower()))
-                .ToList();
+/// <summary>
+/// Checks if there are any other XEdit processes running on the system.
+/// </summary>
+private bool IsAnyXEditProcessRunning()
+{
+    return Process.GetProcesses()
+        .Any(process => info.IsXEdit(process.ProcessName.ToLower()));
+}
 
-            return xEditProcesses.Any();
-        }
-    }
-
-    public async Task EnsureNoXEditRunning()
+private async Task EnsureNoXEditRunning()
     {
         var processes = Process.GetProcesses()
-            .Where(p => _info.IsXEdit(p.ProcessName.ToLower()));
+            .Where(p => info.IsXEdit(p.ProcessName.ToLower()));
 
         foreach (var process in processes)
         {
@@ -109,10 +101,10 @@ public class XEditService : IAsyncDisposable
     {
         try
         {
-            if (File.Exists(_info.XEditLogTxt))
-                File.Delete(_info.XEditLogTxt);
-            if (File.Exists(_info.XEditExcLog))
-                File.Delete(_info.XEditExcLog);
+            if (File.Exists(info.XEditLogTxt))
+                File.Delete(info.XEditLogTxt);
+            if (File.Exists(info.XEditExcLog))
+                File.Delete(info.XEditExcLog);
             return Task.CompletedTask;
         }
         catch (Exception ex)
@@ -129,11 +121,11 @@ public class XEditService : IAsyncDisposable
 
         if (!universal)
         {
-            command = $"\"{_info.XEditPath}\" -QAC -autoexit -autoload \"{pluginName}\"";
+            command = $"\"{info.XEditPath}\" -QAC -autoexit -autoload \"{pluginName}\"";
         }
         else if (gameMode != null)
         {
-            command = $"\"{_info.XEditPath}\" -{gameMode} -QAC -autoexit -autoload \"{pluginName}\"";
+            command = $"\"{info.XEditPath}\" -{gameMode} -QAC -autoexit -autoload \"{pluginName}\"";
         }
 
         if (string.IsNullOrEmpty(command))
@@ -229,7 +221,7 @@ public class XEditService : IAsyncDisposable
         try
         {
             var runTime = DateTime.Now - process.StartTime;
-            return Task.FromResult(runTime.TotalSeconds > _info.CleaningTimeout);
+            return Task.FromResult(runTime.TotalSeconds > info.CleaningTimeout);
         }
         catch
         {
@@ -239,9 +231,9 @@ public class XEditService : IAsyncDisposable
 
     private async Task<bool> CheckExceptions()
     {
-        if (File.Exists(_info.XEditExcLog))
+        if (File.Exists(info.XEditExcLog))
         {
-            var content = await File.ReadAllTextAsync(_info.XEditExcLog);
+            var content = await File.ReadAllTextAsync(info.XEditExcLog);
             return content.Contains("which can not be found") || content.Contains("which it does not have");
         }
         return false;
@@ -254,8 +246,8 @@ public class XEditService : IAsyncDisposable
             process.Kill();
             await Task.Delay(1000);
             await ClearXEditLogs();
-            _info.PluginsProcessed--;
-            _info.CleanFailedList.Add(pluginName);
+            info.PluginsProcessed--;
+            info.CleanFailedList.Add(pluginName);
             Console.WriteLine(errorMessage);
 
             if (addToIgnore)
@@ -279,45 +271,36 @@ public class XEditService : IAsyncDisposable
 /// <summary>
 /// Main cleaning service that orchestrates the plugin cleaning process
 /// </summary>
-public class CleaningService : IAsyncDisposable
+public class CleaningService(
+    PactInfo info,
+    IProgressReporter progressReporter,
+    XEditService xEditService,
+    LoggingService loggingService)
+    : IAsyncDisposable
 {
-    private readonly PactInfo _info;
-    private readonly IProgressReporter _progressReporter;
-    private readonly XEditService _xEditService;
-    private readonly LoggingService _loggingService;
+/*
     private static readonly Regex PluginsPattern = new(@"(?:.+?)(?:\.(?:esl|esm|esp)+)$", RegexOptions.IgnoreCase);
-
-    public CleaningService(
-        PactInfo info,
-        IProgressReporter progressReporter,
-        XEditService xEditService,
-        LoggingService loggingService)
-    {
-        _info = info;
-        _progressReporter = progressReporter;
-        _xEditService = xEditService;
-        _loggingService = loggingService;
-    }
+*/
 
     public async Task CleanPluginsAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             // First check if xEdit is already running
-            if (_xEditService.IsXEditRunning())
+            if (xEditService.IsXEditRunning())
             {
                 Console.WriteLine("❌ ERROR: xEdit is already running. Please close all instances of xEdit before starting the cleaning process.");
                 return;
             }
 
-            using var scope = new ProgressScope(_progressReporter);
+            using var scope = new ProgressScope(progressReporter);
 
             var pluginList = await GetPluginListAsync();
             var skipList = await GetSkipListAsync();
             var pluginsToClean = pluginList.Except(skipList).ToList();
 
-            _progressReporter.ReportMaxValue(pluginsToClean.Count);
-            _progressReporter.SetVisible(true);
+            progressReporter.ReportMaxValue(pluginsToClean.Count);
+            progressReporter.SetVisible(true);
 
             Console.WriteLine($"✔️ CLEANING STARTED... ( PLUGINS TO CLEAN: {pluginsToClean.Count} )");
             var startTime = DateTime.Now;
@@ -334,7 +317,7 @@ public class CleaningService : IAsyncDisposable
 
                 await CleanPluginAsync(plugin, cancellationToken);
                 cleanedCount++;
-                _progressReporter.ReportProgress(cleanedCount);
+                progressReporter.ReportProgress(cleanedCount);
                 Console.WriteLine($"Progress: {cleanedCount}/{pluginsToClean.Count} plugins processed");
             }
 
@@ -357,17 +340,17 @@ public class CleaningService : IAsyncDisposable
     {
         try
         {
-            _progressReporter.ReportPlugin(plugin);
+            progressReporter.ReportPlugin(plugin);
             Console.WriteLine($"\nCURRENTLY CLEANING : {plugin}");
 
-            var command = _xEditService.CreateXEditCommand(plugin);
-            await _xEditService.ClearXEditLogs();
+            var command = xEditService.CreateXEditCommand(plugin);
+            await xEditService.ClearXEditLogs();
 
             // Start xEdit process with exclusive access
-            using var process = await _xEditService.StartXEditProcess(command, cancellationToken);
+            using var process = await xEditService.StartXEditProcess(command, cancellationToken);
 
             // Monitor the process until completion
-            await _xEditService.MonitorXEditProcess(process, plugin, cancellationToken);
+            await xEditService.MonitorXEditProcess(process, plugin, cancellationToken);
 
             // Wait a moment for logs to be written
             await Task.Delay(1000, cancellationToken);
@@ -375,7 +358,7 @@ public class CleaningService : IAsyncDisposable
             // Check cleaning results and update statistics
             await CheckCleaningResultsAsync(plugin);
 
-            _info.PluginsProcessed++;
+            info.PluginsProcessed++;
             Console.WriteLine($"Finished cleaning: {plugin}");
         }
         catch (OperationCanceledException)
@@ -385,14 +368,14 @@ public class CleaningService : IAsyncDisposable
         catch (Exception ex)
         {
             Console.WriteLine($"Error cleaning plugin {plugin}: {ex.Message}");
-            _info.CleanFailedList.Add(plugin);
-            await _loggingService.LogUpdateAsync($"\n{plugin} -> Cleaning failed: {ex.Message}");
+            info.CleanFailedList.Add(plugin);
+            await loggingService.LogUpdateAsync($"\n{plugin} -> Cleaning failed: {ex.Message}");
         }
     }
 
     private async Task<List<string>> GetPluginListAsync()
     {
-        var content = await File.ReadAllLinesAsync(_info.LoadOrderPath);
+        var content = await File.ReadAllLinesAsync(info.LoadOrderPath);
         return content.Skip(1) // Skip first line
                      .Where(line => !line.Contains(".ghost") && !string.IsNullOrWhiteSpace(line))
                      .Select(line => line.Replace("*", "").Trim())
@@ -401,72 +384,72 @@ public class CleaningService : IAsyncDisposable
 
     private Task<HashSet<string>> GetSkipListAsync()
     {
-        var skipList = new HashSet<string>(_info.VipSkipList);
-        skipList.UnionWith(_info.LclSkipList);
+        var skipList = new HashSet<string>(info.GetVipSkipList());
+        skipList.UnionWith(info.LclSkipList);
         return Task.FromResult(skipList);
     }
 
     private async Task CheckCleaningResultsAsync(string plugin)
     {
-        if (!File.Exists(_info.XEditLogTxt))
+        if (!File.Exists(info.XEditLogTxt))
             return;
 
         var cleanedSomething = false;
-        var logLines = await File.ReadAllLinesAsync(_info.XEditLogTxt);
+        var logLines = await File.ReadAllLinesAsync(info.XEditLogTxt);
 
         foreach (var line in logLines)
         {
             if (line.Contains("Undeleting:"))
             {
-                await _loggingService.LogUpdateAsync($"\n{plugin} -> Cleaned UDRs");
-                _info.CleanResultsUDR.Add(plugin);
+                await loggingService.LogUpdateAsync($"\n{plugin} -> Cleaned UDRs");
+                info.CleanResultsUdr.Add(plugin);
                 cleanedSomething = true;
             }
             else if (line.Contains("Removing:"))
             {
-                await _loggingService.LogUpdateAsync($"\n{plugin} -> Cleaned ITMs");
-                _info.CleanResultsITM.Add(plugin);
+                await loggingService.LogUpdateAsync($"\n{plugin} -> Cleaned ITMs");
+                info.CleanResultsItm.Add(plugin);
                 cleanedSomething = true;
             }
             else if (line.Contains("Skipping:"))
             {
-                await _loggingService.LogUpdateAsync($"\n{plugin} -> Found Deleted Navmeshes");
-                _info.CleanResultsNVM.Add(plugin);
+                await loggingService.LogUpdateAsync($"\n{plugin} -> Found Deleted Navmeshes");
+                info.CleanResultsNvm.Add(plugin);
                 cleanedSomething = true;
             }
             else if (line.Contains("Making Partial Form:"))
             {
-                await _loggingService.LogUpdateAsync($"\n{plugin} -> Created Partial Forms");
-                _info.CleanResultsPartialForms.Add(plugin);
+                await loggingService.LogUpdateAsync($"\n{plugin} -> Created Partial Forms");
+                info.CleanResultsPartialForms.Add(plugin);
                 cleanedSomething = true;
             }
         }
 
         if (cleanedSomething)
         {
-            _info.PluginsCleaned++;
+            info.PluginsCleaned++;
         }
         else
         {
-            await _loggingService.LogUpdateAsync($"\n{plugin} -> NOTHING TO CLEAN");
-            _info.LclSkipList.Add(plugin);
+            await loggingService.LogUpdateAsync($"\n{plugin} -> NOTHING TO CLEAN");
+            info.LclSkipList.Add(plugin);
             Console.WriteLine("NOTHING TO CLEAN! Adding plugin to PACT Ignore file...");
         }
     }
 
     private async Task LogStartCleaningAsync(DateTime startTime)
     {
-        await Task.Run(() => _loggingService.ExpireJournal(_info.JournalExpiration));
-        await _loggingService.LogUpdateAsync($"\nSTARTED CLEANING PROCESS AT : {startTime}");
+        await Task.Run(() => loggingService.ExpireJournal(info.JournalExpiration));
+        await loggingService.LogUpdateAsync($"\nSTARTED CLEANING PROCESS AT : {startTime}");
     }
 
     private async Task LogCompletionAsync(DateTime startTime)
     {
         var duration = DateTime.Now - startTime;
-        var message = $"\n✔️ CLEANING COMPLETE! {_info.XEditExecutable} processed all available plugins in {duration.TotalSeconds:F1} seconds." +
-                     $"\n   Processed {_info.PluginsProcessed} plugins and cleaned {_info.PluginsCleaned} of them.";
+        var message = $"\n✔️ CLEANING COMPLETE! {info.XEditExecutable} processed all available plugins in {duration.TotalSeconds:F1} seconds." +
+                     $"\n   Processed {info.PluginsProcessed} plugins and cleaned {info.PluginsCleaned} of them.";
 
-        await _loggingService.LogUpdateAsync(message);
+        await loggingService.LogUpdateAsync(message);
         Console.WriteLine(message);
     }
 
@@ -474,23 +457,23 @@ public class CleaningService : IAsyncDisposable
     {
         var results = new[]
         {
-            (_info.CleanFailedList, "❌ {0} WAS UNABLE TO CLEAN THESE PLUGINS:"),
-            (_info.CleanResultsUDR, "✔️ The following plugins had Undisabled Records and {0} properly disabled them:"),
-            (_info.CleanResultsITM, "✔️ The following plugins had Identical To Master Records and {0} successfully cleaned them:"),
-            (_info.CleanResultsNVM, "❌ CAUTION: The following plugins contain Deleted Navmeshes!\n   Such plugins may cause navmesh related problems or crashes."),
-            (_info.CleanResultsPartialForms, "✔️ The following plugins had ITMs converted to Partial Forms {0}:")
+            (info.CleanFailedList, "❌ {0} WAS UNABLE TO CLEAN THESE PLUGINS:"),
+            (info.CleanResultsUdr, "✔️ The following plugins had Deleted Records and {0} properly disabled them:"),
+            (info.CleanResultsItm, "✔️ The following plugins had Identical To Master Records and {0} successfully cleaned them:"),
+            (info.CleanResultsNvm, "❌ CAUTION: The following plugins contain Deleted Navmeshes!\n   Such plugins may cause navmesh related problems or crashes."),
+            (info.CleanResultsPartialForms, "✔️ The following plugins had ITMs converted to Partial Forms {0}:")
         };
 
         foreach (var (resultSet, messageTemplate) in results)
         {
             if (resultSet.Count > 0)
             {
-                var message = string.Format(messageTemplate, _info.XEditExecutable);
+                var message = string.Format(messageTemplate, info.XEditExecutable);
                 Console.WriteLine($"\n{message}");
                 foreach (var plugin in resultSet)
                 {
                     Console.WriteLine(plugin);
-                    await _loggingService.LogUpdateAsync($"\n{plugin}");
+                    await loggingService.LogUpdateAsync($"\n{plugin}");
                 }
             }
         }
@@ -498,7 +481,7 @@ public class CleaningService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _xEditService.DisposeAsync();
+        await xEditService.DisposeAsync();
     }
 }
 /// <summary>

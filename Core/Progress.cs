@@ -1,9 +1,9 @@
-﻿namespace AutoQAC.Core.Progress;
+﻿namespace PACT.Core;
 
 /// <summary>
 /// Progress scope that automatically reports completion when disposed
 /// </summary>
-public sealed class ProgressScope : IDisposable
+public sealed partial class ProgressScope : IDisposable
 {
     private readonly IProgressReporter _reporter;
     private bool _disposed;

@@ -1,20 +1,14 @@
-﻿using System;
+﻿using System.ComponentModel;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
-using System.Text.RegularExpressions;
 using Microsoft.Win32;
-using System.ComponentModel;
-using AutoQAC.Core.Models;
-using AutoQAC.Core.Services;
-using AutoQAC.Core.Settings;
-using AutoQAC.Core.Progress;
-using System.Threading.Tasks;
-using System.Threading;
+using PACT.Core;
 
-namespace PACT.UI;
+namespace PACT;
 
-public partial class MainWindow : Window
+public partial class MainWindow
 {
     private readonly PactInfo _info;
     private readonly SettingsManager _settings;
@@ -32,7 +26,7 @@ public partial class MainWindow : Window
         _settings = new SettingsManager();
         _progressReporter = new ProgressReporter();
 
-        var xEditService = new XEditService(_info, _progressReporter);
+        var xEditService = new XEditService(_info);
         var loggingService = new LoggingService();
         _cleaningService = new CleaningService(_info, _progressReporter, xEditService, loggingService);
 
@@ -69,7 +63,7 @@ public partial class MainWindow : Window
 
     private void SetupProgressReporting()
     {
-        _progressReporter.ProgressChanged += (s, progress) =>
+        _progressReporter.ProgressChanged += (_, progress) =>
         {
             Dispatcher.Invoke(() =>
             {
@@ -78,17 +72,17 @@ public partial class MainWindow : Window
             });
         };
 
-        _progressReporter.MaxValueChanged += (s, maxValue) =>
+        _progressReporter.MaxValueChanged += (_, maxValue) =>
         {
             Dispatcher.Invoke(() => CleaningProgress.Maximum = maxValue);
         };
 
-        _progressReporter.VisibilityChanged += (s, visible) =>
+        _progressReporter.VisibilityChanged += (_, visible) =>
         {
             Dispatcher.Invoke(() => CleaningProgress.Visibility = visible ? Visibility.Visible : Visibility.Collapsed);
         };
 
-        _progressReporter.PluginChanged += (s, pluginName) =>
+        _progressReporter.PluginChanged += (_, pluginName) =>
         {
             Dispatcher.Invoke(() => CleaningProgress.ToolTip = pluginName);
         };
@@ -96,9 +90,9 @@ public partial class MainWindow : Window
 
     private void UpdateStatistics()
     {
-        ItmCount.Text = _info.CleanResultsITM.Count.ToString();
-        UdrCount.Text = _info.CleanResultsUDR.Count.ToString();
-        NavmeshCount.Text = _info.CleanResultsNVM.Count.ToString();
+        ItmCount.Text = _info.CleanResultsItm.Count.ToString();
+        UdrCount.Text = _info.CleanResultsUdr.Count.ToString();
+        NavmeshCount.Text = _info.CleanResultsNvm.Count.ToString();
         PartialFormsCount.Text = _info.CleanResultsPartialForms.Count.ToString();
     }
 
@@ -243,85 +237,118 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void OnStartCleaningClick(object sender, RoutedEventArgs e)
+    private void OnStartCleaningClick(object sender, RoutedEventArgs e)
     {
-        if (!_isConfigured)
-        {
-            MessageBox.Show("Please configure both the load order file and xEdit executable before cleaning.",
-                          "Configuration Required", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
+        // Using a wrapper to call the actual async method without risking unhandled exceptions
+        _ = HandleCleaningAsync();
+    }
 
-        if (CleanPluginsButton.Content.ToString() == "STOP CLEANING")
+    private async Task HandleCleaningAsync()
+    {
+        if (!CheckConfiguration()) return;
+
+        if (IsCleaningInProgress())
         {
-            _cleaningCancellationSource?.Cancel();
+            CancelCleaning();
             return;
         }
 
         try
         {
-            // Disable UI elements during cleaning
-            CleanPluginsButton.Content = "STOP CLEANING";
-            CleanPluginsButton.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(255, 192, 192)); // Light red
+            PrepareCleaningUi();
+            ResetCleaningStatistics();
 
-            SetLoadOrderButton.IsEnabled = false;
-            SetXEditButton.IsEnabled = false;
-            CleaningTimeoutInput.IsEnabled = false;
-            JournalExpirationInput.IsEnabled = false;
-            BackupPluginsButton.IsEnabled = false;
-            RestoreBackupButton.IsEnabled = false;
-
-            // Reset statistics
-            _info.CleanResultsITM.Clear();
-            _info.CleanResultsUDR.Clear();
-            _info.CleanResultsNVM.Clear();
-            _info.CleanResultsPartialForms.Clear();
-            UpdateStatistics();
-
-            // Create new cancellation token
             _cleaningCancellationSource = new CancellationTokenSource();
 
-            // Start cleaning process
             await _cleaningService.CleanPluginsAsync(_cleaningCancellationSource.Token);
 
             if (!_cleaningCancellationSource.Token.IsCancellationRequested)
             {
                 MessageBox.Show("Cleaning process completed successfully!",
-                              "Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "Complete", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
         catch (OperationCanceledException)
         {
             MessageBox.Show("Cleaning process was cancelled.",
-                          "Cancelled", MessageBoxButton.OK, MessageBoxImage.Information);
+                "Cancelled", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Error during cleaning process: {ex.Message}",
-                          "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            // Reset UI state
-            CleanPluginsButton.Content = "START CLEANING";
-            CleanPluginsButton.Background = (System.Windows.Media.Brush)Resources["SystemChromeLowColor"];
-
-            SetLoadOrderButton.IsEnabled = true;
-            SetXEditButton.IsEnabled = true;
-            CleaningTimeoutInput.IsEnabled = true;
-            JournalExpirationInput.IsEnabled = true;
-            BackupPluginsButton.IsEnabled = false; // Keep disabled until implemented
-            RestoreBackupButton.IsEnabled = false; // Keep disabled until implemented
-
-            _cleaningCancellationSource?.Dispose();
-            _cleaningCancellationSource = null;
-
-            _progressReporter.Reset();
-            CleaningProgress.Value = 0;
-            CleaningProgress.Visibility = Visibility.Collapsed;
+            ResetUiAfterCleaning();
         }
     }
+
+    private bool CheckConfiguration()
+    {
+        if (!_isConfigured)
+        {
+            MessageBox.Show("Please configure both the load order file and xEdit executable before cleaning.",
+                "Configuration Required", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool IsCleaningInProgress() =>
+        CleanPluginsButton.Content.ToString() == "STOP CLEANING";
+
+    private void CancelCleaning()
+    {
+        _cleaningCancellationSource?.Cancel();
+    }
+
+    private void PrepareCleaningUi()
+    {
+        CleanPluginsButton.Content = "STOP CLEANING";
+        CleanPluginsButton.Background = new System.Windows.Media.SolidColorBrush(LightRedColor);
+
+        SetButtonsEnabled(false);
+    }
+
+    private void ResetUiAfterCleaning()
+    {
+        CleanPluginsButton.Content = "START CLEANING";
+        // ReSharper disable once AssignNullToNotNullAttribute
+        CleanPluginsButton.Background = (System.Windows.Media.Brush)Resources["SystemChromeLowColor"];
+
+        SetButtonsEnabled(true);
+
+        _cleaningCancellationSource?.Dispose();
+        _cleaningCancellationSource = null;
+
+        _progressReporter.Reset();
+        CleaningProgress.Value = 0;
+        CleaningProgress.Visibility = Visibility.Collapsed;
+    }
+
+    private void SetButtonsEnabled(bool isEnabled)
+    {
+        SetLoadOrderButton.IsEnabled = isEnabled;
+        SetXEditButton.IsEnabled = isEnabled;
+        CleaningTimeoutInput.IsEnabled = isEnabled;
+        JournalExpirationInput.IsEnabled = isEnabled;
+        BackupPluginsButton.IsEnabled = false; // Keep disabled until implemented
+        RestoreBackupButton.IsEnabled = false; // Keep disabled until implemented
+    }
+
+    private void ResetCleaningStatistics()
+    {
+        _info.CleanResultsItm.Clear();
+        _info.CleanResultsUdr.Clear();
+        _info.CleanResultsNvm.Clear();
+        _info.CleanResultsPartialForms.Clear();
+        UpdateStatistics();
+    }
+
+    private static readonly System.Windows.Media.Color LightRedColor =
+        System.Windows.Media.Color.FromRgb(255, 192, 192);
 
     private void OnBackupPluginsClick(object sender, RoutedEventArgs e)
     {

@@ -1,12 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
+﻿using System.IO;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
-using AutoQAC.Core.Models;
 
-namespace AutoQAC.Core.Settings;
+namespace PACT.Core;
 
 public class SettingsManager
 {
@@ -144,9 +140,9 @@ public class SettingsManager
 
         foreach (var key in keys)
         {
-            if (value is Dictionary<string, object> dict && dict.ContainsKey(key))
+            if (value is Dictionary<string, object> dict && dict.TryGetValue(key, out var value1))
             {
-                value = dict[key];
+                value = value1;
             }
             else
             {
@@ -160,7 +156,7 @@ public class SettingsManager
     public async Task InitializeInfoAsync(PactInfo info)
     {
         // Load and set all settings asynchronously
-        var tasks = new Task<object?>[]
+        var tasks = new[]
         {
             Task.Run(() => (object?)GetSetting<string>("LoadOrder TXT")),
             Task.Run(() => (object?)GetSetting<string>("XEDIT EXE")),

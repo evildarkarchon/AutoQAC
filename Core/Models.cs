@@ -1,45 +1,42 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+﻿using System.IO;
 
-namespace AutoQAC.Core.Models;
+namespace PACT.Core;
 
 /// <summary>
 /// Core information and settings for PACT operations
 /// </summary>
 public class PactInfo
 {
-    public string XEditExecutable { get; set; } = string.Empty;
-    public string XEditPath { get; set; } = string.Empty;
-    public string LoadOrderTxt { get; set; } = string.Empty;
-    public string LoadOrderPath { get; set; } = string.Empty;
+    public string XEditExecutable { get; private set; } = string.Empty;
+    public string XEditPath { get; private set; } = string.Empty;
+    public string LoadOrderTxt { get; private set; } = string.Empty;
+    public string LoadOrderPath { get; private set; } = string.Empty;
     public int JournalExpiration { get; set; } = 7;
     public int CleaningTimeout { get; set; } = 300;
 
-    public HashSet<string> CleanResultsUDR { get; } = new();
-    public HashSet<string> CleanResultsITM { get; } = new();
-    public HashSet<string> CleanResultsNVM { get; } = new();
-    public HashSet<string> CleanResultsPartialForms { get; } = new();
-    public HashSet<string> CleanFailedList { get; } = new();
+    public HashSet<string> CleanResultsUdr { get; } = [];
+    public HashSet<string> CleanResultsItm { get; } = [];
+    public HashSet<string> CleanResultsNvm { get; } = [];
+    public HashSet<string> CleanResultsPartialForms { get; } = [];
+    public HashSet<string> CleanFailedList { get; } = [];
     public int PluginsProcessed { get; set; }
     public int PluginsCleaned { get; set; }
 
-    public List<string> LclSkipList { get; } = new();
+    public List<string> LclSkipList { get; } = [];
 
     // Game-specific skip lists with default entries
-    public List<string> Fo3SkipList { get; } = new()
-    {
+    private List<string> Fo3SkipList { get; } =
+    [
         "Fallout3.esm",
         "Anchorage.esm",
         "ThePitt.esm",
         "BrokenSteel.esm",
         "PointLookout.esm",
         "Zeta.esm"
-    };
+    ];
 
-    public List<string> FnvSkipList { get; } = new()
-    {
+    private List<string> FnvSkipList { get; } =
+    [
         "FalloutNV.esm",
         "DeadMoney.esm",
         "HonestHearts.esm",
@@ -50,10 +47,10 @@ public class PactInfo
         "ClassicPack.esm",
         "MercenaryPack.esm",
         "TribalPack.esm"
-    };
+    ];
 
-    public List<string> Fo4SkipList { get; } = new()
-    {
+    private List<string> Fo4SkipList { get; } =
+    [
         "Fallout4.esm",
         "DLCRobot.esm",
         "DLCworkshop01.esm",
@@ -62,40 +59,43 @@ public class PactInfo
         "DLCCoast.esm",
         "DLCNukaWorld.esm",
         "DLCUltraHighResolution.esm"
-    };
+    ];
 
-    public List<string> SseSkipList { get; } = new()
-    {
+    private List<string> SseSkipList { get; } =
+    [
         "Skyrim.esm",
         "Update.esm",
         "Dawnguard.esm",
         "HearthFires.esm",
         "Dragonborn.esm"
-    };
+    ];
 
-    public IEnumerable<string> VipSkipList =>
-        Fo3SkipList.Concat(FnvSkipList)
-                   .Concat(Fo4SkipList)
-                   .Concat(SseSkipList)
-                   .ToList();
+    private IEnumerable<string> AggregateSkipLists()
+    {
+        return Fo3SkipList.Concat(FnvSkipList)
+            .Concat(Fo4SkipList)
+            .Concat(SseSkipList);
+    }
+
+    public IEnumerable<string> GetVipSkipList() => AggregateSkipLists();
 
     public string XEditLogTxt { get; set; } = string.Empty;
     public string XEditExcLog { get; set; } = string.Empty;
 
     // Game-specific XEdit executables
-    public IReadOnlySet<string> XEditListFallout3 { get; } = new HashSet<string>
+    private IReadOnlySet<string> XEditListFallout3 { get; } = new HashSet<string>
     {
         "FO3Edit.exe",
         "FO3EditQuickAutoClean.exe"
     };
 
-    public IReadOnlySet<string> XEditListNewVegas { get; } = new HashSet<string>
+    private IReadOnlySet<string> XEditListNewVegas { get; } = new HashSet<string>
     {
         "FNVEdit.exe",
         "FNVEditQuickAutoClean.exe"
     };
 
-    public IReadOnlySet<string> XEditListFallout4 { get; } = new HashSet<string>
+    private IReadOnlySet<string> XEditListFallout4 { get; } = new HashSet<string>
     {
         "FO4Edit.exe",
         "FO4EditQuickAutoClean.exe",
@@ -103,7 +103,7 @@ public class PactInfo
         "FO4VREditQuickAutoClean.exe"
     };
 
-    public IReadOnlySet<string> XEditListSkyrimSE { get; } = new HashSet<string>
+    private IReadOnlySet<string> XEditListSkyrimSe { get; } = new HashSet<string>
     {
         "SSEEdit.exe",
         "SSEEditQuickAutoClean.exe",
@@ -111,21 +111,21 @@ public class PactInfo
         "SkyrimVREditQuickAutoClean.exe"
     };
 
-    public IReadOnlySet<string> XEditListUniversal { get; } = new HashSet<string>
+    private IReadOnlySet<string> XEditListUniversal { get; } = new HashSet<string>
     {
         "xEdit.exe",
         "xEditQuickAutoClean.exe"
     };
 
     // Computed properties for lowercase comparisons
-    public IReadOnlySet<string> LowerSpecific =>
+    private IReadOnlySet<string> LowerSpecific =>
         XEditListFallout3.Concat(XEditListNewVegas)
                          .Concat(XEditListFallout4)
-                         .Concat(XEditListSkyrimSE)
+                         .Concat(XEditListSkyrimSe)
                          .Select(x => x.ToLowerInvariant())
                          .ToHashSet();
 
-    public IReadOnlySet<string> LowerUniversal =>
+    private IReadOnlySet<string> LowerUniversal =>
         XEditListUniversal.Select(x => x.ToLowerInvariant()).ToHashSet();
 
     public void UpdateXEditPaths(string xEditPath)
@@ -175,9 +175,9 @@ public class PactInfo
 public enum GameMode
 {
     Fallout3,
-    FalloutNV,
+    FalloutNv,
     Fallout4,
-    SkyrimSE
+    SkyrimSe
 }
 
 /// <summary>
@@ -188,18 +188,18 @@ public static class GameModeExtensions
     public static string ToMasterFile(this GameMode mode) => mode switch
     {
         GameMode.Fallout3 => "Fallout3.esm",
-        GameMode.FalloutNV => "FalloutNV.esm",
+        GameMode.FalloutNv => "FalloutNV.esm",
         GameMode.Fallout4 => "Fallout4.esm",
-        GameMode.SkyrimSE => "Skyrim.esm",
+        GameMode.SkyrimSe => "Skyrim.esm",
         _ => throw new ArgumentException($"Unknown game mode: {mode}")
     };
 
     public static string ToShortName(this GameMode mode) => mode switch
     {
         GameMode.Fallout3 => "fo3",
-        GameMode.FalloutNV => "fnv",
+        GameMode.FalloutNv => "fnv",
         GameMode.Fallout4 => "fo4",
-        GameMode.SkyrimSE => "sse",
+        GameMode.SkyrimSe => "sse",
         _ => throw new ArgumentException($"Unknown game mode: {mode}")
     };
 }
